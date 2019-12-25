@@ -1,7 +1,7 @@
 from newsapi import NewsApiClient
 import pandas as pd
 import math
-import time
+import datetime
 
 
 api = NewsApiClient(api_key='e5d3b48c925c4042a00f82ba31b07c53')
@@ -31,10 +31,12 @@ def get_raw_news(name):
     """
     # get initial df for 1st page
     keyword = str(name)
+    today = datetime.date.today()
+    amonth_b4=today+ datetime.timedelta(-30)
     temp_dict = api.get_everything(sources='business-insider-uk, bloomberg, business-insider, '
                                            'australian-financial-review, '
                                            'cnbc, fortune, the-wall-street-journal',
-                                   language='en', from_param='2019-11-17', to='2019-12-17', page_size=100, q=keyword)
+                                   language='en', from_param=str(amonth_b4), to=str(today), page_size=100, q=keyword)
     temp_df = pd.DataFrame(temp_dict['articles'])
     result_df = temp_df[['title', 'description', 'content']]
     return result_df
@@ -48,6 +50,6 @@ next steps:
 '''
 
 # test
-df = get_raw_news('apple')
+df = get_raw_news('Apple')
 
 
