@@ -1,20 +1,7 @@
-import yfinance as yf
 import numpy as np
 import pandas as pd
-from pypfopt.efficient_frontier import EfficientFrontier
+import yfinance as yf
 
-
-#### READ FIRST ####
-
-# This code is not complete. Reason being that BL model needs predicted returns.
-# Our MVP uses probabilities. How should we go about this.
-
-# Checklist
-# [/] Filter based on Quality & Sentiment strength
-# [ ] BL optimisation
-# [ ] Backtesting
-
-####################
 
 class Team3:
     def __init__(self, team1_output, team2_output, date):
@@ -23,111 +10,124 @@ class Team3:
         self.team1_output = team1_output
         self.date = date
 
-    def get_capm_param(self, companies_ticker, riskless_domestic_cash, verbose=1):
-
+    def getclose(self,stocks_to_invest):
         """
-        This is a helper function for BL_Optimization function
-        :param companies_ticker: a list of company tickers
-        :param riskless_domestic_cash: the risk free rate
-        :param verbose: a binary variable for extra comments
-        :return: parameters of the CAPM model formed from the companies given
+        Function to get close from Yahoo
+        :param stocks_to_invest: filtered stocks
+        :return: table with date as index and ticker close prices as columns
         """
-
-        comp_returns = []
-        comp_market_cap = []
+        comp_returns = pd.DataFrame()
+        ticker = stocks_to_invest['Ticker'].values
 
         # get data for each company from Yahoo
-        for comp in companies_ticker:
-            if verbose == 1:
-                print(comp)
-
+        for comp in ticker:
             yahoo = yf.Ticker(comp)
-            historical_stock = yahoo.history(period="1y", interval="1mo").pct_change(1)
-            info_stock = yahoo.info
-            historical_stock[comp] = historical_stock["Close"]
-            df3 = historical_stock[comp].dropna(0)
-            df3 = df3.loc[~df3.index.duplicated(keep='first')]
-            comp_returns.append(df3)
-            comp_market_cap.append(info_stock["marketCap"])
+            historical_stock = yahoo.history(period="1y", interval="1mo")["Close"].to_frame().reset_index()
+            historical_stock['Ticker'] = comp
+            if len(comp_returns) == 0:
+                comp_returns = historical_stock
+            else:
+                comp_returns = comp_returns.append(historical_stock)
 
-        # returns
-        all_returns = pd.concat(comp_returns, 1).dropna(0)
-        returns = all_returns.values.reshape(len(companies_ticker), len(all_returns))
+        # Set index to date
+        df = comp_returns.set_index('Date')
 
-        # market cap
-        market_caps = pd.DataFrame({"Market Capitalizations": comp_market_cap}, index=companies_ticker)
-        market_caps["%"] = market_caps / np.sum(market_caps)
-        market_caps = market_caps["%"]
+        # pivot data frame by ticker
+        table = df.pivot(columns='Ticker')
 
-        # risk aversion rate
-        risk_aversion_rate = (np.mean(all_returns.values.reshape(-1)) - riskless_domestic_cash / 12) / np.var(
-            all_returns.values.reshape(-1))
-        covar_matrix = np.cov(returns)
+        # Tidy up by dropping Nans
+        table.columns = [col[1] for col in table.columns]
+        table = table.dropna()
 
-        # average returns
-        mu = np.mean(all_returns)
+        # return Table
+        return table
 
-        # efficient frontier weights
-        ef = EfficientFrontier(mu, covar_matrix, weight_bounds=(-1, 1))
-        raw_weights = ef.max_sharpe()
-        weights_c = [[raw_weights[n]] for n in raw_weights]
-        weights = pd.DataFrame(weights_c, index=companies_ticker, columns={"Pi"})
-        pi = pd.DataFrame(risk_aversion_rate * np.matmul(covar_matrix, weights))
-
-        # monthly performance
-        performance_monthly = ef.portfolio_performance(risk_free_rate=riskless_domestic_cash / 12)
-
-        return all_returns, market_caps, covar_matrix, risk_aversion_rate, weights, pi, performance_monthly
-
-    def bl_optimization(self, companies_ticker, riskless_domestic_cash, tau, volatility_constraint=0, verbose=1):
+    def portfolio_annualised_performance(self, weights, mean_returns, cov_matrix):
         """
-        Black-Litterman Portfolio Optimization
-
+        Calculate portfolio annualised performance
+        :param weights: randomly generated weights
+        :param mean_returns: average returns
+        :param cov_matrix: covariance matrix
+        :return: standard deviation & returns
         """
-        # Used Filter from output of team 2, so no longer need this method
-        # if verbose == 1:
-        #     print("Processing Sentiment Analysis and Scoring Returns-Sentiment Relationship ...")
-        # predicted_returns_and_Omega = companies_in_sentiment_basket(companies_ticker)
+        returns = np.sum(mean_returns * weights) * 252
+        std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
+        return std, returns
 
-        if verbose == 1:
-            print("Sentiment Analysis and Scoring Returns-Sentiment Relationship Performed")
-            print("Performing Initial Portfolio Optimization Without Bias  ...")
+    def random_portfolios(self, stocks_to_invest,num_portfolios, mean_returns, cov_matrix, risk_free_rate):
+        """
+        Generate random portfolios for optimisation later on
+        :param stocks_to_invest: filtered stocks
+        :param num_portfolios: number of randomly generated portfolios
+        :param mean_returns: average returns
+        :param cov_matrix: covariance matrix
+        :param risk_free_rate: risk free rate
+        :return: results (contains std deviation, returns, sharpe ratio), weights
+        """
+        results = np.zeros((3, num_portfolios))
+        weights_record = []
+        for i in range(num_portfolios):
+            weights = np.random.uniform(low=-1.0, high=1.0, size=len(stocks_to_invest))
+            weights /= np.sum(weights)
+            weights_record.append(weights)
+            portfolio_std_dev, portfolio_return = self.portfolio_annualised_performance(weights, mean_returns,
+                                                                                        cov_matrix)
+            results[0, i] = portfolio_std_dev
+            results[1, i] = portfolio_return
+            results[2, i] = (portfolio_return - risk_free_rate) / portfolio_std_dev
+        return results, weights_record
 
-        all_returns, market_caps, sigma, risk_aversion_rate, weights, pi, performance = self.get_capm_param(
-            companies_ticker,
-            riskless_domestic_cash,
-            verbose=verbose)
-        if verbose == 1:
-            print("Initial Optimization Performed")
-            print("Performing Black-Litterman Portfolio Optimization ...")
+    def display_simulated_ef_with_random(self, stocks_to_invest, table, mean_returns, cov_matrix, num_portfolios,
+                                         risk_free_rate):
+        """
+        Display results
+        :param stocks_to_invest: filtered stocks
+        :param table: table generated from getclose(). Data frame of close values
+        :param mean_returns: average returns
+        :param cov_matrix: covariance matrix
+        :param num_portfolios: number of randomly generated portfolios
+        :param risk_free_rate: risk free rate
+        :return: -
+        """
+        results, weights = self.random_portfolios(stocks_to_invest, num_portfolios, mean_returns, cov_matrix,
+                                                  risk_free_rate)
+        # maximise sharpe ratio
+        max_sharpe_idx = np.argmax(results[2])
+        sdp, rp = results[0, max_sharpe_idx], results[1, max_sharpe_idx]
+        max_sharpe_allocation = pd.DataFrame(weights[max_sharpe_idx], index=table.columns, columns=['allocation'])
+        max_sharpe_allocation.allocation = [round(i * 100, 2) for i in max_sharpe_allocation.allocation]
+        max_sharpe_allocation = max_sharpe_allocation.T
 
-        # SINCE WE NO LONGER GET PREDICTED RETURNS FROM TEAM 2, SHOULD WE STILL BE USING BL??
-        Q = np.array([n.tolist()[0][0] for n in predicted_returns_and_Omega["Prediction returns"]]).reshape(
-            len(predicted_returns_and_Omega), 1)
+        # minimise volatility
+        min_vol_idx = np.argmin(results[0])
+        sdp_min, rp_min = results[0, min_vol_idx], results[1, min_vol_idx]
+        min_vol_allocation = pd.DataFrame(weights[min_vol_idx], index=table.columns, columns=['allocation'])
+        min_vol_allocation.allocation = [round(i * 100, 2) for i in min_vol_allocation.allocation]
+        min_vol_allocation = min_vol_allocation.T
 
-        Omega = np.diag(predicted_returns_and_Omega["Confidence BL"])
+        print("-" * 80)
+        print("Maximum Sharpe Ratio Portfolio Allocation\n")
+        print("Annualised Return:", round(rp, 2))
+        print("Annualised Volatility:", round(sdp, 2))
+        print("\n")
+        print(max_sharpe_allocation)
+        print("-" * 80)
+        print("Minimum Volatility Portfolio Allocation\n")
+        print("Annualised Return:", round(rp_min, 2))
+        print("Annualised Volatility:", round(sdp_min, 2))
+        print("\n")
+        print(min_vol_allocation)
 
-        sigma_inv = np.linalg.inv(sigma)
-        sigma_inv_pi = np.matmul(sigma_inv, pi)
+    def equalweight(self, stocks_to_invest):
+        nticker = len(stocks_to_invest)
+        nlong = len(stocks_to_invest[stocks_to_invest['Prob Up']>stocks_to_invest['Prob Down']])
+        nshort = nticker - nlong
+        weightlong = 1/nlong
+        weightshort = -1/nshort
+        stocks_to_invest['Equal Weight'] = np.where(stocks_to_invest['Prob Up'] > stocks_to_invest['Prob Down'],
+                                                    weightlong, weightshort)
+        return stocks_to_invest
 
-        E_R = np.matmul(np.linalg.inv(1 / tau * sigma_inv + np.linalg.inv(Omega)),
-                        (1 / tau * sigma_inv_pi + np.matmul(np.linalg.inv(Omega), Q)))
-
-        new_weights = np.matmul(sigma_inv, E_R) * 1 / risk_aversion_rate
-
-        if volatility_constraint != 0:
-            new_weights = np.sqrt(volatility_constraint) * new_weights / np.matmul(
-                new_weights.values.reshape(1, len(new_weights)),
-                np.matmul(sigma, new_weights.values.reshape(len(new_weights), 1)))
-
-        new_weights = new_weights / np.sum(new_weights)
-        if verbose == 1:
-            print("Black-Litterman Portfolio Optimization Performed")
-
-        return pd.DataFrame({"Companies": companies_ticker, "Returns": all_returns.mean(), "Prediction": Q.reshape(-1),
-                             "Confidence Prediction": predicted_returns_and_Omega["Confidence BL"].values.reshape(-1),
-                             "Pi": pi["Pi"], "E(R)": E_R["Pi"], "Markovitz Weights": weights["Pi"],
-                             "CS-SIMVO Weights": new_weights["Pi"]}).set_index("Companies")
 
     def filter(self, quality, sentiment):
         """
@@ -178,7 +178,27 @@ def main(date, quality, sentiment):
     # Filter stocks based on quality factor and sentiment factor
 
     stocks_to_invest = inputs.filter(quality, sentiment)
+
+    # Added Equal Weights
+    stocks_to_invest = inputs.equalweight(stocks_to_invest)
+    print("-" * 80)
+    print("Equal Weight Allocation\n")
     print(stocks_to_invest)
+
+    table = inputs.getclose(stocks_to_invest)
+
+    returns = table.pct_change()
+    mean_returns = returns.mean()
+    cov_matrix = returns.cov()
+    num_portfolios = 25000
+    risk_free_rate = 0.0178
+
+    # Maximum Sharpe Ratio Portfolio Allocation
+    # Minimum Volatility Portfolio Allocation
+    # adapted from https://towardsdatascience.com/efficient-frontier-portfolio-optimisation-in-python-e7844051e7f
+    inputs.display_simulated_ef_with_random(stocks_to_invest, table, mean_returns, cov_matrix, num_portfolios,
+                                            risk_free_rate)
+
     return
 
 
