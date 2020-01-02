@@ -1,28 +1,22 @@
 import pandas as pd
 import numpy as np
-from newsapi import NewsApiClient
 import pandasql as ps
+import os
+import json
+from newsapi import NewsApiClient
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import datetime
+# the below two just for counting progress
+import sys
+import time
 
 analyser = SentimentIntensityAnalyzer()
 api = NewsApiClient(api_key='e5d3b48c925c4042a00f82ba31b07c53')
-
-
-# List of tickers
-# generate a list of all the updated tickers for the S&P 500 (from Wikipedia, since they update it often)
-
-table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
-ticker_df = table[0]
-# the ticker_df['Symbol'] contains the tickers, ticker_df['security'] contains name
-# use name or ticker, the search result from newsApi may be different.
-# so we use both, then merge them together (newsapi)
 
 # use several functions to do this, to make script modular
 
 # ** THE GOAL is to generate a score-date df for each stock
 
-# api generate
 
 def get_api_news(name):
     """
@@ -39,7 +33,10 @@ def get_api_news(name):
                                            'cnbc, fortune, the-wall-street-journal',
                                    language='en', from_param=str(amonth_b4), to=str(today), page_size=100, q=keyword)
     temp_df = pd.DataFrame(temp_dict['articles'])
-    result_df = temp_df[['publishedAt', 'title', 'description', 'content']]
+    result_df = temp_df[['publishedAt', 'title', 'description']]
+
+    result_df.columns = ['date', 'title', 'content']  # reformat column name for consistency
+
     return result_df
 
 
@@ -130,29 +127,139 @@ def vader_scores(df, name, column='description'):
     return result_df
 
 
-def content_scores(df):
-    pass
+def average_scores(df):
+    q1 = """SELECT ticker, date, avg(neg_score) AS avg_negative_score, avg(neu_score) AS avg_neutral_score, avg(pos_score) AS avg_positive_score
+            FROM final_table
+            GROUP BY ticker, date
+            ORDER BY date
+            """
+
+    team2_table = ps.sqldf(q1, locals())
 
 
 def formatting(df, name):
     """
     re-format the content, indices, etc. of the given df, **especially the date values**.
     also, sort the df in ascending time order.
+
     :param df: raw df, usually scraped by other function from newsapi or kaggle data
     :param name: company name of corresponding news df, since we're scraping news one by one
     :return: a re-formatted df, easy for further processing.
     """
-    datetime_object = datetime.strptime(test.iloc[0, 0], '%Y-%m-%dT%H:%M:%S.%f%z')
+    # part 1, change the date format and sort
+    '''
+    try:
+        df['date'] = df['date'].apply(lambda x: datetime.datetime.strptime(x, '%Y-%m-%d'))
+    except ValueError:
+        try:
+            df['date'] = df['date'].apply(lambda x: datetime.datetime.strptime(x, '%Y-%m-%d%H:%M:%S.%f%z'))
+        except ValueError:
+            try:
+                df['date'] = df['date'].apply(lambda x: datetime.datetime.strptime(x, '%Y-%m-%dT%H:%M:%SZ'))
+            except ValueError:
+                print('ERROR: wrong date schedule!')
+    '''
+
+    df['date'] = pd.to_datetime(df['date'])
+    df.sort_values(by='date', inplace=True)
+    df['date'].values.astype('datetime64[D]')
+
+    # part 2, add a column of name
+    df['name'] = name
+
+    return df
 
 
 # run
+
 if __name__ == "__main__":
-    df = get_api_news('AAPL')
-    df2 = get_api_news('Apple')
+    '''
+    From team 2:
+    
+    if on one day, there's no news on this company, directly set this date's sentiment value 
+    to ZERO.
+    
+    the date must be continuous, with a adjustable start/end date.
+    '''
+    # Step 1, Fetch raw data
+    # 1.1, generate a tickers list
+    # the ticker_df['Symbol'] contains the tickers, ticker_df['security'] contains name
+    # use name or ticker, the search result from newsApi may be different.
+    # so we try use both, then merge them together (newsapi)
 
-kaggle_1 = pd.read_csv('all-the-news/articles1.csv', names=['title', 'date', 'content'])
-kaggle_2 = pd.read_csv('all-the-news/articles2.csv', names=['title', 'date', 'content'])
-kaggle_3 = pd.read_csv('all-the-news/articles3.csv', names=['title', 'date', 'content'])
+    table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
+    ticker_df = table[0]
+    ticker_df = ticker_df.loc[:, ['Symbol', 'Security', 'GICS Sector']]
+    # so we have a df with tickers, name and industry sector.
+    # 1.2, loop over list and fetch company news data
 
-df_list = [kaggle_1, kaggle_2, kaggle_3]
+    # load kaggle data
+    print('Loading Kaggle data... please wait')
+    kaggle_1 = pd.read_csv('all-the-news/articles1.csv')
+    kaggle_1 = kaggle_1[['date', 'title', 'content']]
+
+    kaggle_2 = pd.read_csv('all-the-news/articles2.csv')
+    kaggle_2 = kaggle_2[['date', 'title', 'content']]
+
+    kaggle_3 = pd.read_csv('all-the-news/articles3.csv')
+    kaggle_3 = kaggle_3[['date', 'title', 'content']]
+    print('Success! \n')
+
+    # load json data
+    print('Loading *.json data... please wait')
+    dir_list = ['/Users/vincentz/Desktop/Vincent/Python_Projects/investment_fund/us-financial-news-articles/2018_01_11'
+                ]
+    for i in dir_list:  # need further development to fetch multiple files
+        json_data = json_reader(i)
+
+    print('Success! \n')
+
+    i = 0
+    for ticker, name in zip(ticker_df['Symbol'].values, ticker_df['Security'].values):
+
+        # print live progress
+        i += round(100/ticker_df.shape[0], 2)
+        sys.stdout.write(f'Searching data with {name}...\r%d%%' % i)
+        sys.stdout.flush()
+
+        # api: scrap data one by one
+        api_data = get_api_news(ticker)
+        # format with formatting
+        api_data = formatting(api_data, ticker)
+
+        # kaggle: use filter function to generate a df
+        kaggle_data1 = kaggle_filter(kaggle_1, name)
+        kaggle_data2 = kaggle_filter(kaggle_2, name)
+        kaggle_data3 = kaggle_filter(kaggle_3, name)
+        # can use a dictionary to avoid repeating
+        for data in [kaggle_data1, kaggle_data2, kaggle_data3]:
+            data = formatting(data, ticker)
+
+        # 2. merge dataset into one huge df
+
+        # 3. calculate sentiment score
+
+        # 4. calculate average daily score with pandasql
+
+        # output
+
+
+    '''
+    kaggle_1 = pd.read_csv('all-the-news/articles1.csv')
+    kaggle_1 = kaggle_1[['date', 'title', 'content']]
+
+    kaggle_2 = pd.read_csv('all-the-news/articles2.csv')
+    kaggle_2 = kaggle_2[['date', 'title', 'content']]
+
+    kaggle_3 = pd.read_csv('all-the-news/articles3.csv')
+    kaggle_3 = kaggle_3[['date', 'title', 'content']]
+    '''
+    # df_list = [kaggle_1, kaggle_2, kaggle_3]
+
+    # test json reader
+    json_test = json_reader('newsjson')
+
+
+
+
 
