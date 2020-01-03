@@ -1,3 +1,8 @@
+"""
+Sif-sentiment: Cleaners team code
+@author: Farah & Vincent
+"""
+
 import pandas as pd
 import numpy as np
 import pandasql as ps
@@ -32,10 +37,16 @@ def get_api_news(name):
                                            'australian-financial-review, '
                                            'cnbc, fortune, the-wall-street-journal',
                                    language='en', from_param=str(amonth_b4), to=str(today), page_size=100, q=keyword)
-    temp_df = pd.DataFrame(temp_dict['articles'])
-    result_df = temp_df[['publishedAt', 'title', 'description']]
 
-    result_df.columns = ['date', 'title', 'content']  # reformat column name for consistency
+    # case of empty data set, i.e., NO NEWS within 30 days
+    if temp_dict['totalResults'] == 0:
+        result_df = pd.DataFrame({'date': np.nan, 'title': np.nan, 'content': np.nan}, index=[0])
+    # normal case
+    else:
+        temp_df = pd.DataFrame(temp_dict['articles'])
+        result_df = temp_df.loc[:, ['publishedAt', 'title', 'description']]
+
+        result_df.columns = ['date', 'title', 'content']  # reformat column name for consistency
 
     return result_df
 
@@ -44,15 +55,22 @@ def kaggle_filter(df, name):
     """
 
     :param df: processed kaggle df
-    :param name: keyword string
+    :param name: keyword string, usually be a specific security name instead of a ticker
     :return: filtered df
     """
-    picked_list = []
-    for i in range(df.shape(0)):  # check if name in 'title'
-        if name in df.iloc[i, 0]:
-            picked_list.append(i)
+    df_naFree = df.dropna()  # drop na
+    df_naFree.reset_index(drop=True, inplace=True)
 
-    filtered_df = df[picked_list, :]
+    picked_list = []
+    for index in range(df_naFree.shape[0]):
+        if name in df_naFree.iloc[index, 1] or name in df.iloc[index, 2]:  # check if name in 'title' or 'content'
+            picked_list.append(index)
+
+    # empty list case
+    if len(picked_list) == 0:
+        filtered_df = pd.DataFrame({'date': np.nan, 'title': np.nan, 'content': np.nan}, index=[0])
+    else:
+        filtered_df = df_naFree.iloc[picked_list, :]
 
     return filtered_df
 
@@ -95,10 +113,13 @@ def json_reader(dir):
         news_content.append(pd.DataFrame(content_dict, index=[0]))  # need an index, otherwise pandas will error
     result_df = pd.concat(news_content, keys=news_list)  # use pd.concat to combine all the news data
 
+    # format column name
+    result_df.columns = ['date', 'title', 'content']
+
     return result_df
 
 
-def vader_scores(df, name, column='description'):
+def vader_scores(df, name, column='title'):
     """
     calculate VADER sentiment score with all descriptions.
     Note: this is suggested to use on df with news data of ONE company.
@@ -137,13 +158,13 @@ def average_scores(df):
     team2_table = ps.sqldf(q1, locals())
 
 
-def formatting(df, name):
+def formatting(df, *name):
     """
     re-format the content, indices, etc. of the given df, **especially the date values**.
     also, sort the df in ascending time order.
 
     :param df: raw df, usually scraped by other function from newsapi or kaggle data
-    :param name: company name of corresponding news df, since we're scraping news one by one
+    :param name: (OPTIONAL) company name of corresponding news df, since we're scraping news one by one
     :return: a re-formatted df, easy for further processing.
     """
     # part 1, change the date format and sort
@@ -162,17 +183,22 @@ def formatting(df, name):
 
     df['date'] = pd.to_datetime(df['date'])
     df.sort_values(by='date', inplace=True)
-    df['date'].values.astype('datetime64[D]')
+    df['date'] = df['date'].values.astype('datetime64[D]')  # drop all hour/min/sec value, we only need date
 
-    # part 2, add a column of name
-    df['name'] = name
+    # part 2, add a column of name, if name param exists
+    for i in name:
+        df['name'] = i
 
     return df
 
 
-# run
+def initialize():
+    pass
 
+
+# run
 if __name__ == "__main__":
+
     '''
     From team 2:
     
@@ -191,7 +217,10 @@ if __name__ == "__main__":
     ticker_df = table[0]
     ticker_df = ticker_df.loc[:, ['Symbol', 'Security', 'GICS Sector']]
     # so we have a df with tickers, name and industry sector.
+
     # 1.2, loop over list and fetch company news data
+    concat_data_list = []
+    score_list = []
 
     # load kaggle data
     print('Loading Kaggle data... please wait')
@@ -204,7 +233,7 @@ if __name__ == "__main__":
     kaggle_3 = pd.read_csv('all-the-news/articles3.csv')
     kaggle_3 = kaggle_3[['date', 'title', 'content']]
     print('Success! \n')
-
+    
     # load json data
     print('Loading *.json data... please wait')
     dir_list = ['/Users/vincentz/Desktop/Vincent/Python_Projects/investment_fund/us-financial-news-articles/2018_01_11'
@@ -214,34 +243,56 @@ if __name__ == "__main__":
 
     print('Success! \n')
 
-    i = 0
-    for ticker, name in zip(ticker_df['Symbol'].values, ticker_df['Security'].values):
+    j = 0
+    # fetch newsAPI data and filtering
+    # for ticker, security in zip(ticker_df['Symbol'].values, ticker_df['Security'].values):
+    print('filtering & scoring, please wait...')
+    for ticker, security in zip(['AAPL'], ['apple']):
+        # in each loop, we scrap/filter specific company's news from newsAPI and kaggle data, and form a huge df
 
         # print live progress
-        i += round(100/ticker_df.shape[0], 2)
-        sys.stdout.write(f'Searching data with {name}...\r%d%%' % i)
+        j += round(100/ticker_df.shape[0], 2)
+        sys.stdout.write(f'Searching data with {security}...\r%d%%' % j)
         sys.stdout.flush()
 
-        # api: scrap data one by one
+        # api: scrap data
         api_data = get_api_news(ticker)
-        # format with formatting
+        api_data_sec = get_api_news(security)
+
+        # format with formatting function
         api_data = formatting(api_data, ticker)
+        api_data_sec = formatting(api_data_sec, ticker)  # here not using security since we need to put them together
+
+        concat_data_list.append(api_data)  # test if list works, if error change into dict
+        concat_data_list.append(api_data_sec)
 
         # kaggle: use filter function to generate a df
-        kaggle_data1 = kaggle_filter(kaggle_1, name)
-        kaggle_data2 = kaggle_filter(kaggle_2, name)
-        kaggle_data3 = kaggle_filter(kaggle_3, name)
+        kaggle_data1 = kaggle_filter(kaggle_1, security)
+        kaggle_data2 = kaggle_filter(kaggle_2, security)
+        kaggle_data3 = kaggle_filter(kaggle_3, security)
         # can use a dictionary to avoid repeating
-        for data in [kaggle_data1, kaggle_data2, kaggle_data3]:
-            data = formatting(data, ticker)
+
+        # json:
+        filtered_json = kaggle_filter(json_data, security)
+
+        # reformat dataframes
+        for data in [kaggle_data1, kaggle_data2, kaggle_data3, filtered_json]:
+            data = formatting(data, ticker)  # name consistent
+            concat_data_list.append(data)  # add to concat list
 
         # 2. merge dataset into one huge df
+        whole_data = pd.concat(concat_data_list)
+        whole_data = formatting(whole_data)
+        whole_data.reset_index(inplace=True, drop=True)  # reformat it again
 
-        # 3. calculate sentiment score
+        # whole_data.dropna(inplace=True)
+
+        # 3. calculate sentiment score (for the specific company)
+        raw_score = vader_scores(whole_data, ticker)
 
         # 4. calculate average daily score with pandasql
-
-        # output
+        score_list.append(raw_score)
+        # 5. output with given date interval, fill the gaps with zero values
 
 
     '''
