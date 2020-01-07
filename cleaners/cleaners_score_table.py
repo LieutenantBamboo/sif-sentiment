@@ -5,7 +5,6 @@ Sif-sentiment: Cleaners team code
 
 import pandas as pd
 import numpy as np
-import pandasql as ps
 import os
 import json
 from newsapi import NewsApiClient
@@ -128,6 +127,12 @@ def vader_scores(df, name, column='title'):
     :param name: the name of that ONE company, used in index
     :return: a df with sentiment scores
     """
+    # drop na, and if no news at all, if no data, return a one-row df with value 0
+    df.dropna(inplace=True)
+    if df.shape[0] == 0:
+        return pd.DataFrame(pd.DataFrame({'name': name, 'date': str(datetime.date.today()),
+                                          'neg_score': 0, 'neu_score': 0, 'pos_score': 0}))
+
     date = df['date'].values
     pos_list = []
     neg_list = []
@@ -149,13 +154,20 @@ def vader_scores(df, name, column='title'):
 
 
 def average_scores(df):
+    """
+    replaced through groupby(), reindex()
+    :param df:
+    :return:
+    """
+    '''
     q1 = """SELECT ticker, date, avg(neg_score) AS avg_negative_score, avg(neu_score) AS avg_neutral_score, avg(pos_score) AS avg_positive_score
             FROM final_table
             GROUP BY ticker, date
             ORDER BY date
             """
-
-    team2_table = ps.sqldf(q1, locals())
+    '''
+    # team2_table = ps.sqldf(q1, locals())
+    pass
 
 
 def formatting(df, *name):
@@ -199,6 +211,10 @@ def initialize():
 # run
 if __name__ == "__main__":
 
+    # time it!
+    start_stopwatch = time.process_time()
+    print(f'started at: {datetime.datetime.today()}')
+
     '''
     From team 2:
     
@@ -218,10 +234,12 @@ if __name__ == "__main__":
     ticker_df = ticker_df.loc[:, ['Symbol', 'Security', 'GICS Sector']]
     # so we have a df with tickers, name and industry sector.
 
+    # initialize output lists
+    score_list = []
+    count_list = []
+
     # 1.2, loop over list and fetch company news data
     concat_data_list = []
-    score_list = []
-
     # load kaggle data
     print('Loading Kaggle data... please wait')
     kaggle_1 = pd.read_csv('all-the-news/articles1.csv')
@@ -238,16 +256,21 @@ if __name__ == "__main__":
     print('Loading *.json data... please wait')
     dir_list = ['/Users/vincentz/Desktop/Vincent/Python_Projects/investment_fund/us-financial-news-articles/2018_01_11'
                 ]
-    for i in dir_list:  # need further development to fetch multiple files
-        json_data = json_reader(i)
+    json_list = []
+    for i in dir_list:
+        #   # need further development to fetch multiple files
+        temp_json_data = json_reader(i)
+        json_list.append(temp_json_data)
+
+    json_data = pd.concat(json_list)
 
     print('Success! \n')
 
     j = 0
     # fetch newsAPI data and filtering
-    # for ticker, security in zip(ticker_df['Symbol'].values, ticker_df['Security'].values):
     print('filtering & scoring, please wait...')
-    for ticker, security in zip(['AAPL'], ['apple']):
+    for ticker, security in zip(ticker_df['Symbol'].values, ticker_df['Security'].values):
+    # for ticker, security in zip(['AAPL', 'GOOG'], ['apple', 'google']):  # example test
         # in each loop, we scrap/filter specific company's news from newsAPI and kaggle data, and form a huge df
 
         # print live progress
@@ -281,19 +304,57 @@ if __name__ == "__main__":
             concat_data_list.append(data)  # add to concat list
 
         # 2. merge dataset into one huge df
-        whole_data = pd.concat(concat_data_list)
-        whole_data = formatting(whole_data)
-        whole_data.reset_index(inplace=True, drop=True)  # reformat it again
+        current_data = pd.concat(concat_data_list)
+        current_data = formatting(current_data)
+        current_data.reset_index(inplace=True, drop=True)  # reformat it again
 
-        # whole_data.dropna(inplace=True)
+        # current_data.dropna(inplace=True)
 
         # 3. calculate sentiment score (for the specific company)
-        raw_score = vader_scores(whole_data, ticker)
+        raw_score = vader_scores(current_data, ticker)
 
-        # 4. calculate average daily score with pandasql
-        score_list.append(raw_score)
-        # 5. output with given date interval, fill the gaps with zero values
+        # make two copy to avoid mixed reference
+        score_copy1 = raw_score.copy()
+        score_copy2 = raw_score.copy()
+        # when groupby, use .agg([]) to apply multiple methods (not used, since nested columns are hard to handle
 
+        # use groupby twice to deal with different team requests
+        score_current_df = score_copy1.groupby(by='date', as_index=False).mean()
+        score_current_df['name'] = ticker  # seems the name column is lost in groupby
+
+        # the count_df should be like in the overleaf share doc, with only one ticker column
+        # trick: only groupby with one score, and change that score count column name as ticker
+        current_count_df = score_copy2.loc[:, ['date', 'neg_score']].groupby(by='date', as_index=False).count()
+        current_count_df.columns = ['date', f'{ticker}']
+
+        # 4. format the current dfs to make date consistent with different companies, with pd.date_range()
+        # first make a date range as requested
+        start_date = '2019-12-01'  # example date
+        end_date = '2020-01-06'
+        time_range = pd.bdate_range(start=start_date, end=end_date)  # bdate for business/working date
+
+        # need to set index to use reindex()
+        current_count_df.set_index('date', inplace=True)
+        score_current_df.set_index('date', inplace=True)
+
+        # fill the no-data value with 0
+        current_count_df_full = current_count_df.reindex(time_range, fill_value=0).copy()
+        score_current_df_full = score_current_df.reindex(time_range).copy()
+        for col in ['neg_score', 'neu_score', 'pos_score']:
+            score_current_df_full[col].fillna(value=0, inplace=True)
+        score_current_df_full['name'].fillna(value=ticker, inplace=True)
+
+        count_list.append(current_count_df_full)
+        score_list.append(score_current_df_full)
+
+        # 5. output
+
+    # need out of loop
+    result_score_df = pd.concat(score_list)
+    result_count_df = pd.concat(count_list, axis=1)
+
+    # end stopwatch!
+    print('\nTime used: ' + str(time.process_time() - start_stopwatch))
 
     '''
     kaggle_1 = pd.read_csv('all-the-news/articles1.csv')
@@ -307,8 +368,6 @@ if __name__ == "__main__":
     '''
     # df_list = [kaggle_1, kaggle_2, kaggle_3]
 
-    # test json reader
-    json_test = json_reader('newsjson')
 
 
 
