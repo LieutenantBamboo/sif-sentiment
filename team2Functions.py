@@ -94,10 +94,10 @@ def classify(data):
     svmCl = svm.SVC(kernel='linear', probability=True)
     rfClass = RandomForestClassifier(n_estimators = 1000)
     MLPC = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(5, 2), random_state=0)
-    
+    d=data[['Date','Ticker']]
     X = data[['Pos', 'Neg', 'Neu']]
     y = data['response']
-    X_train,X_test,y_train,y_test=train_test_split(X,y,test_size=0.25,random_state=0)
+    d_train,d_test,X_train,X_test,y_train,y_test=train_test_split(d,X,y,test_size=0.25,random_state=0)
     
     models = [logReg, svmCl, rfClass]
 
@@ -121,6 +121,8 @@ def classify(data):
         plt.title('Confusion matrix', y=1.1)
         plt.ylabel('Actual label')
         plt.xlabel('Predicted label')
+    y_prob=pd.DataFrame({'Date':d_test['Date'],'Ticker':d_test['Ticker'],'Prob Up':y_prob[:,0],'Prob Down':y_prob[:,1]})
+    return y_pred,y_prob
 
 def simulateData():
     date = pd.date_range('2018-01-02', '2019-05-20', freq=BDay())
