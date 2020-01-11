@@ -367,7 +367,8 @@ if __name__ == "__main__":
     kaggle_3 = kaggle_3[['date', 'title', 'content']]
     '''
     # df_list = [kaggle_1, kaggle_2, kaggle_3]
-
+    print('everything done!')
+    return result_score_df
 
 
 
