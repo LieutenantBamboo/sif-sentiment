@@ -1,0 +1,141 @@
+from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+import pandas as pd
+import plotly as py
+from google.colab import drive
+from sklearn.model_selection import KFold
+import statistics
+import numpy as np
+import warnings
+warnings.filterwarnings("ignore")
+
+# Download
+file_data_AI_Business_School = pd.read_csv("YOUR PATH FOR FILE").set_index("Date").dropna(0)
+
+range_num = 4
+
+X = file_data_AI_Business_School.drop(["REL_5D"], 1)
+X = X.drop("12/31/2019", 0).astype(float)
+Y_p = file_data_AI_Business_School[["REL_5D"]].drop("12/31/2019").astype(float)
+Y = pd.DataFrame(pd.qcut(Y_p.values.reshape(-1), range_num, labels = range(range_num)), index = Y_p.index)
+test = file_data_AI_Business_School.loc["12/31/2019"]
+
+from sklearn import preprocessing
+X = pd.DataFrame(preprocessing.scale(X), index = X.index, columns = X.columns)
+
+past_look = 60
+
+from IPython.display import clear_output, display
+import progressbar
+
+within_preds_CUMM = []
+
+accuracies_CUMM = []
+accuracies_update = []
+givs = [np.nan, np.nan] 
+givs_all = [np.nan, np.nan] 
+index_ay = [np.nan, np.nan]
+    
+AI_all = MLPClassifier(max_iter = 100000, hidden_layer_sizes=(200, ), learning_rate = "adaptive", tol = 0.0000001)
+AI_all.fit(X, Y.values.reshape(-1))    
+      
+show_r = 0
+show_h = 0
+show_w = 0
+show_r_all = 0
+show_h_all = 0
+show_w_all = 0
+
+stock_return = 0
+CS_return = 0
+CS_return_all = 0
+
+SR = [0]
+CSR = [0]
+CSR_all = [0]
+
+bar = progressbar.ProgressBar(maxval = len(list(range(past_look, len(X)))), widgets=[progressbar.Bar("#", "[", "]"), " ", progressbar.Percentage(), " ", progressbar.AdaptiveETA()])
+bar.start()
+    
+m = 1
+for k in range(past_look, len(X)):
+
+        AI = MLPClassifier(max_iter = 1000, hidden_layer_sizes=(300, ), tol = 0.00001)
+        X_n = X.iloc[0:k]
+        Y_n = Y.iloc[0:k]
+
+        bar.update(m)
+
+        AI = AI.fit(X_n, Y_n.values.reshape(-1))
+        within_prediction = AI.predict(X_n)
+
+        given_prediction = AI.predict(X.iloc[k:k+1])
+
+        given_prediction_all = AI_all.predict(X.iloc[k:k+1])
+
+        accur_score = accuracy_score(within_prediction, Y_n)
+        
+        prob = AI.predict_proba(X.iloc[k:k+1])
+        prob_all = AI_all.predict_proba(X.iloc[k:k+1])
+
+        date = X.iloc[k:k+1].index
+
+        if prob[0][int(given_prediction[0])]/np.sum(prob_all[0]) > 0.6:
+              giv_to_app = given_prediction[0]
+        else:
+              giv_to_app = range_num + 1
+
+        if prob_all[0][int(given_prediction_all[0])]/np.sum(prob_all[0]) > 0.6:
+              giv_to_app_all = given_prediction_all[0]
+        else:
+              giv_to_app_all = range_num + 1
+
+        if giv_to_app == Y.iloc[k].values[0]:
+              show_r = show_r + 1
+        elif giv_to_app == range_num + 1:
+              show_h = show_h + 1
+        else:
+              show_w = show_w + 1
+
+        if giv_to_app_all == Y.iloc[k].values[0]:
+              show_r_all = show_r_all + 1
+        elif giv_to_app_all == range_num + 1:
+              show_h_all = show_h_all + 1
+        else:
+              show_w_all = show_w_all + 1
+
+        givs.append(giv_to_app)
+        givs_all.append(giv_to_app_all)
+
+        if k != len(X)-1:
+
+          accuracies_CUMM.append(accur_score)
+          accuracies_update.append((show_r+show_h)/m)
+
+          m = m + 1
+          
+print("The AI suggests the group {} AAPL for the next period".format(giv_to_app))
+    
+bar.finish()
+
+width = 0.35
+plt.figure()
+plt.bar([0,1], [show_r, show_r_all], width)
+plt.bar([0,1], [show_w, show_w_all], width, bottom = [show_r, show_r_all])
+plt.bar([0,1], [show_h, show_h_all], width, bottom = [show_r + show_w, show_r_all + show_w_all])
+plt.legend(["Right", "Wrong", "Hold"])
+plt.title("AAPL")
+plt.show()
+
+plt.figure()
+plt.plot(list(range(len(accuracies_update))), accuracies_update, label = "Live Trading Accuracy")
+plt.plot(list(range(len(accuracies_CUMM))), accuracies_CUMM, label = "Trained NN Accuracy")
+plt.legend()
+plt.title("AAPL")
+plt.show()
+
+
+if (show_r+show_h)/m < 0.6:
+      print("Note that for AAPL, the final Realized Accuracy is {}, below 60%".format(np.around((show_r+show_h)/m*100,2)))
+      print("That may mean that the Features selected may not be correlated to returns or that the hold thresholds are too loose.")
