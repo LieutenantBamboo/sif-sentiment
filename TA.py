@@ -20,9 +20,10 @@ def technical_analysis(ticker, start_date, end_date):
     return data
 
 
+
 if __name__ == "__main__":
     # test run on AAPL
-    ta = technical_analysis('AAPL', '2016-01-01', '2019-03-01')
+    ta = technical_analysis('AAPL', '2000-01-01', '2019-03-01')
 
     # list of technical analysis indicators
     print(ta.columns)
